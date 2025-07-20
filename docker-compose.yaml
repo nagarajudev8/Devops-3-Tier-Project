@@ -14,7 +14,7 @@ services:
             - "3306:3306"
     backend:
         build: ./api
-        containerName: backend-api
+        container_name: backend-api
         environment: 
             DB_HOST: mysql
             DB_USERNAME: root
