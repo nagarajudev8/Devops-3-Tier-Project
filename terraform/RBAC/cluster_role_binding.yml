@@ -9,5 +9,5 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: jenkins
-    namespace: dev
+    namespace: prod
 
