@@ -5,3 +5,7 @@ terraform.tfstate
 terraform.tfstate.backup
 .terraform/
 .terraform.lock.hcl
+gitleaks-report.json
+eksctl_Linux_amd64.tar.gz
+kubectl
+kubectl.sha256
