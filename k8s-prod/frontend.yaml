@@ -19,6 +19,7 @@ spec:
       containers:
         - name: frontend
           image: naga8/frontend:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 80
 ---
