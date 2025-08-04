@@ -1,0 +1,210 @@
+pipeline {
+    agent any
+		tools {
+		nodejs 'nodejs23'
+	}
+
+    environment {
+        PROJECT_NAME = '🧰 My-App'
+        ENVIRONMENT = '🚀 Production'
+		SCANNER_HOME = tool 'sonar-scanner'
+    }
+
+    stages {
+		stage('Git Checkout'){
+			steps {
+				git url : 'https://github.com/nagarajudev8/Devops-3-Tier-Project.git' , branch: 'main'
+			}
+		}
+		stage('Front End Compile'){
+			steps{
+				dir ('client'){
+					echo 'FrontEnd Compilation 🏗️ Started'
+					sh 'find . -name "*.js" -exec node --check {} +'
+					echo 'FrontEnd Compilation 🏗️ Completed'
+				}
+			}
+		}
+		stage('BackEnd Compile') {
+			steps {
+				dir('api'){
+					echo 'Backend compilation 🏗️ Started'
+					sh 'find . -name "*.js" -exec node --check {} +'
+					echo 'Backend Compilation 🏗️ Completed'
+				}
+			}
+		}
+		stage('GitLeaks Scan'){
+			steps {
+				echo 'GitLeaks Scan 🧪 Started'
+				sh 'gitleaks detect --source ./client --exit-code 1'
+				sh 'gitleaks detect --source ./api --exit-code 1'
+				echo 'GitLeaks Scan 🧪 Completed'
+			}
+		}
+		stage('SonarQube Analysis'){
+			steps{
+				echo 'SonarQube Analysis 🧪 started'
+				withSonarQubeEnv('sonar'){
+					sh '''$SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=NodeJS-Project \
+							-Dsonar.projectKey=NodeJS-Project '''
+				}
+				echo 'SonarQube Analysis 🧪 Completed'
+			}
+		}
+		stage('Quality Gate Check'){
+			steps{
+				echo 'Quality Gate Check 🏗 started'
+				timeout(time:2 , unit: 'MINUTES'){
+					waitForQualityGate abortPipeline: true, credentialsId: 'sonar-token'
+				}
+				echo "Quality Gate Check 🏗 completed"
+			}
+		}
+		stage('Trivy FS Scan'){
+			steps {
+				echo 'Trivy FS SCAN 🧪 STARTED'
+				sh 'trivy fs  --format table -o fs-scan-report.html .'
+				echo 'Trivy FS SCAN 🧪 COMPLETED'
+			}
+		}
+		stage('FrontEnd compile build push to Docker'){
+			steps{
+				script{
+					echo 'FrontEnd Build push 🚀 started'
+					dir('client'){
+						sh 'docker build -t naga8/frontend:latest .'
+						sh 'trivy image --format table -o frontend-image-scan-report.html naga8/frontend:latest'
+						withCredentials([usernamePassword(credentialsId: 'docker-cred', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+							sh 'docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD'
+							sh 'docker push naga8/frontend:latest'
+						}
+						sh 'docker push naga8/frontend:latest'
+					}
+					echo 'Frontend Build push 🚀 completed'
+				}
+			}
+		}
+		stage('BackEnd Compile build push to Docker'){
+			steps{
+				script{
+					echo 'BackEnd Build Push 🚀 started'
+					dir('api'){
+						sh 'docker build -t naga8/backend:latest .'
+						sh 'trivy image --format table -o backend-image-scan-report.html naga8/backend:latest'
+						withCredentials([usernamePassword(credentialsId: 'docker-cred', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+							sh 'docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD'
+							sh 'docker push naga8/backend:latest'
+						}
+						sh 'docker push naga8/backend:latest'
+					}
+					echo 'Backend Build Push 🚀 Completed'
+				}
+			}
+		}
+		
+		
+		stage('Deployment To Prod') {
+            steps {
+                script {
+					echo 'Deployment To Prod 🚀 started'
+                    withKubeConfig(caCertificate: '', clusterName: 'devopsshack-cluster', contextName: '', credentialsId: 'k8s-token', namespace: 'prod', restrictKubeConfigAccess: false, serverUrl: 'https://1805ACD5BF8D166381B35871A60842F8.gr7.eu-west-1.eks.amazonaws.com') {
+                        sh 'kubectl apply -f k8s-prod/sc.yaml'
+                        sleep 20
+                        sh 'kubectl apply -f k8s-prod/mysql.yaml -n prod'
+                        sh 'kubectl apply -f k8s-prod/backend.yaml -n prod'
+                        sh 'kubectl apply -f k8s-prod/frontend.yaml -n prod'
+                        sh 'kubectl apply -f k8s-prod/ci.yaml'
+                        sh 'kubectl apply -f k8s-prod/ingress.yaml -n prod'
+                        sleep 30
+                    }
+					echo 'Deployment To Prod 🚀 Completed'
+                }
+            }
+        }
+		
+		stage('Verify Deployment To Prod') {
+            steps {
+                script {
+                    withKubeConfig(caCertificate: '', clusterName: 'devopsshack-cluster', contextName: '', credentialsId: 'k8s-token', namespace: 'prod', restrictKubeConfigAccess: false, serverUrl: 'https://1805ACD5BF8D166381B35871A60842F8.gr7.eu-west-1.eks.amazonaws.com') {
+                        sh 'kubectl get pods -n prod'
+                        sleep 20
+                        sh 'kubectl get ingress -n prod'
+                        
+                    }
+                }
+            }
+        }
+
+    }
+
+    post {
+        success {
+            withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_URL')]) {
+                script {
+                    def message = """{
+                        "text": "*✅ ${PROJECT_NAME} Build Successful!*",
+                        "attachments": [
+                            {
+                                "color": "#36a64f",
+                                "fields": [
+                                    { "title": "Job", "value": "${env.JOB_NAME}", "short": true },
+                                    { "title": "Build", "value": "#${env.BUILD_NUMBER}", "short": true },
+                                    { "title": "Environment", "value": "${ENVIRONMENT}", "short": true }
+                                ],
+                                "footer": "Jenkins CI",
+                                "footer_icon": "https://www.jenkins.io/images/logos/jenkins/jenkins.png",
+                                "ts": ${System.currentTimeMillis() / 1000},
+                                "actions": [
+                                    {
+                                        "type": "button",
+                                        "text": "View Build",
+                                        "url": "${env.BUILD_URL}",
+                                        "style": "primary"
+                                    }
+                                ]
+                            }
+                        ]
+                    }"""
+                    sh """curl -X POST -H 'Content-type: application/json' --data '${message}' $SLACK_URL"""
+                }
+            }
+        }
+
+        failure {
+            withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_URL')]) {
+                script {
+                    def message = """{
+                        "text": "<!here> *❌ ${PROJECT_NAME} Build Failed!*",
+                        "attachments": [
+                            {
+                                "color": "#FF0000",
+                                "fields": [
+                                    { "title": "Job", "value": "${env.JOB_NAME}", "short": true },
+                                    { "title": "Build", "value": "#${env.BUILD_NUMBER}", "short": true },
+                                    { "title": "Environment", "value": "${ENVIRONMENT}", "short": true }
+                                ],
+                                "footer": "Jenkins CI",
+                                "footer_icon": "https://www.jenkins.io/images/logos/jenkins/jenkins.png",
+                                "ts": ${System.currentTimeMillis() / 1000},
+                                "actions": [
+                                    {
+                                        "type": "button",
+                                        "text": "View Build Logs",
+                                        "url": "${env.BUILD_URL}",
+                                        "style": "danger"
+                                    }
+                                ]
+                            }
+                        ]
+                    }"""
+                    sh """curl -X POST -H 'Content-type: application/json' --data '${message}' $SLACK_URL"""
+                }
+            }
+        }
+
+        always {
+            echo "🎯 Post-build notification sent"
+        }
+    }
+}
