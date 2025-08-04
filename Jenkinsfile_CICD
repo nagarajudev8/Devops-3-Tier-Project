@@ -1,0 +1,135 @@
+pipeline {
+	agent any
+	 tools {
+		nodejs 'nodejs23'
+	}
+	environment {
+		SCANNER_HOME = tool 'sonar-scanner'
+	}
+	stages {
+		stage('Git Checkout'){
+			steps {
+				git url : 'https://github.com/nagarajudev8/3-Tier-DevSecOps-Mega-Project.git' , branch: 'deploy-to-dev-k8'
+			}
+		}
+		stage('Front End Compile'){
+			steps{
+				dir ('client'){
+					echo 'FrontEnd Compilation Started'
+					sh 'find . -name "*.js" -exec node --check {} +'
+					echo 'FrontEnd Compilation Completed'
+				}
+			}
+		}
+		stage('BackEnd Compile') {
+			steps {
+				dir('api'){
+					echo 'Backend compilation Started'
+					sh 'find . -name "*.js" -exec node --check {} +'
+					echo 'Backend Compilation Completed'
+				}
+			}
+		}
+		stage('GitLeaks Scan'){
+			steps {
+				echo 'GitLeaks Scan Started'
+				sh 'gitleaks detect --source ./client --exit-code 1'
+				sh 'gitleaks detect --source ./api --exit-code 1'
+				echo 'GitLeaks Scan Completed'
+			}
+		}
+		stage('SonarQube Analysis'){
+			steps{
+				echo 'SonarQube Analysis started'
+				withSonarQubeEnv('sonar'){
+					sh '''$SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=NodeJS-Project \
+							-Dsonar.projectKey=NodeJS-Project '''
+				}
+				echo 'SonarQube Analysis Completed'
+			}
+		}
+		stage('Quality Gate Check'){
+			steps{
+				echo 'Quality Gate Check started'
+				timeout(time:2 , unit: 'MINUTES'){
+					waitForQualityGate abortPipeline: true, credentialsId: 'sonar-token'
+				}
+				echo "Quality Gate Check completed"
+			}
+		}
+		stage('Trivy FS Scan'){
+			steps {
+				echo 'Trivy FS SCAN STARTED'
+				sh 'trivy fs  --format table -o fs-scan-report.html .'
+				echo 'Trivy FS SCAN COMPLETED'
+			}
+		}
+		stage('FrontEnd compile build push to Docker'){
+			steps{
+				script{
+					echo 'FrontEnd Build push started'
+					dir('client'){
+						sh 'docker build -t naga8/frontend:latest .'
+						sh 'trivy image --format table -o frontend-image-scan-report.html naga8/frontend:latest'
+						withCredentials([usernamePassword(credentialsId: 'docker-cred', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+							sh 'docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD'
+							sh 'docker push naga8/frontend:latest'
+						}
+						sh 'docker push naga8/frontend:latest'
+					}
+					echo 'Frontend Build push completed'
+				}
+			}
+		}
+		stage('BackEnd Compile build push to Docker'){
+			steps{
+				script{
+					echo 'BackEnd Build Push started'
+					dir('api'){
+						sh 'docker build -t naga8/backend:latest .'
+						sh 'trivy image --format table -o backend-image-scan-report.html naga8/backend:latest'
+						withCredentials([usernamePassword(credentialsId: 'docker-cred', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+							sh 'docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD'
+							sh 'docker push naga8/backend:latest'
+						}
+						sh 'docker push naga8/backend:latest'
+					}
+					echo 'Backend Build Push Completed'
+				}
+			}
+		}
+		stage('K8-deploy') {
+            steps {
+                script {
+                    withKubeConfig(caCertificate: '', clusterName: 'devopsshack-cluster', contextName: '', credentialsId: 'k8s-token', namespace: 'dev', restrictKubeConfigAccess: false, serverUrl: 'https://90795AB777800D14EE0B88D8E3F97221.gr7.ap-south-1.eks.amazonaws.com') {
+                            sh 'kubectl apply -f k8s-dev/sc.yaml -n dev'
+                            sh 'kubectl apply -f k8s-dev/mysql.yaml -n dev'
+                            sh 'kubectl apply -f k8s-dev/backend.yaml -n dev'
+                            sh 'kubectl apply -f k8s-dev/frontend.yaml -n dev'
+                            sleep 30
+                        }
+                }
+            }
+        }
+        
+        stage('verify-K8-deploy') {
+            steps {
+                script {
+                    withKubeConfig(caCertificate: '', clusterName: 'devopsshack-cluster', contextName: '', credentialsId: 'k8s-token', namespace: 'dev', restrictKubeConfigAccess: false, serverUrl: 'https://90795AB777800D14EE0B88D8E3F97221.gr7.ap-south-1.eks.amazonaws.com') {
+                            sh 'kubectl get pods -n dev'
+                            sh 'kubectl get svc -n dev'
+                            
+                        }
+                }
+            }
+        }
+	}
+}
+			
+						
+			
+				
+			
+		
+				
+						
